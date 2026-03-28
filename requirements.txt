@@ -1,0 +1,14 @@
+pymongo
+data-golf
+requests
+beautifulsoup4
+numpy
+pandas
+scipy
+python-dotenv
+thefuzz
+python-Levenshtein
+matplotlib
+seaborn
+tqdm
+discord-webhook
