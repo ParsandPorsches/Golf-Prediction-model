@@ -25,6 +25,7 @@ COLLECTIONS = {
     "model_predictions":     "model_predictions",
     "live_odds":             "live_odds",
     "bet_log":               "bet_log",
+    "course_fit_profiles":   "course_fit_profiles",
 }
 
 # ── DataGolf API ───────────────────────────────────────────────────────────────

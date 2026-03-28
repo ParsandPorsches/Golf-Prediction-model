@@ -200,37 +200,90 @@ for _canonical, _data in COURSE_DATABASE.items():
         _ALIAS_MAP[_alias.lower()] = _canonical
 
 
-def get_course_weights(course_name: str) -> dict | None:
+def _get_weights_from_mongo(course_name: str, db) -> dict | None:
     """
-    Fuzzy-match a course name against the database and return its SG weights.
+    Look up data-driven course weights from the course_fit_profiles MongoDB
+    collection (populated by analysis/course_fit_builder.py).
+
+    Tries exact match first, then difflib fuzzy match (cutoff=0.65).
+    Returns {"ott", "app", "arg", "putt"} or None.
+    """
+    if db is None:
+        return None
+
+    try:
+        collection = db["course_fit_profiles"]
+        query_lower = course_name.strip().lower()
+
+        # Load all stored event names for matching
+        all_docs = list(collection.find({}, {"_id": 0, "event_name": 1,
+                                             "ott": 1, "app": 1, "arg": 1, "putt": 1}))
+        if not all_docs:
+            return None
+
+        names_lower = [d["event_name"].lower() for d in all_docs]
+
+        # Exact match
+        if query_lower in names_lower:
+            idx = names_lower.index(query_lower)
+            d = all_docs[idx]
+            log.info(f"  Course fit: '{course_name}' -> MongoDB profile (exact).")
+            return {"ott": d["ott"], "app": d["app"], "arg": d["arg"], "putt": d["putt"]}
+
+        # Fuzzy match
+        close = difflib.get_close_matches(query_lower, names_lower, n=1, cutoff=0.80)
+        if close:
+            idx = names_lower.index(close[0])
+            d = all_docs[idx]
+            log.info(
+                f"  Course fit: '{course_name}' -> MongoDB profile "
+                f"(fuzzy via '{all_docs[idx]['event_name']}')."
+            )
+            return {"ott": d["ott"], "app": d["app"], "arg": d["arg"], "putt": d["putt"]}
+
+    except Exception as exc:
+        log.debug(f"  MongoDB course profile lookup failed: {exc}")
+
+    return None
+
+
+def get_course_weights(course_name: str, db=None) -> dict | None:
+    """
+    Return SG component weights for a given course.
+
+    Lookup order:
+      1. MongoDB course_fit_profiles (data-driven, if db provided and populated)
+      2. Hardcoded COURSE_DATABASE (exact alias match)
+      3. Hardcoded COURSE_DATABASE (difflib fuzzy match, cutoff=0.60)
 
     Returns a dict {"ott": float, "app": float, "arg": float, "putt": float}
-    or None if no sufficiently close match is found.
-
-    Matching order:
-      1. Exact case-insensitive alias match
-      2. difflib.get_close_matches on the full alias list (cutoff=0.60)
+    or None if no match is found.
     """
     if not course_name or not course_name.strip():
         return None
 
+    # 1. Data-driven MongoDB profile
+    mongo_weights = _get_weights_from_mongo(course_name, db)
+    if mongo_weights is not None:
+        return mongo_weights
+
     query = course_name.strip().lower()
 
-    # Exact alias match first
+    # 2. Exact alias match against hardcoded database
     if query in _ALIAS_MAP:
         canonical = _ALIAS_MAP[query]
         data = COURSE_DATABASE[canonical]
-        log.info(f"  Course match: '{course_name}' -> '{canonical}' (exact)")
+        log.info(f"  Course match: '{course_name}' -> '{canonical}' (hardcoded exact)")
         return {"ott": data["ott"], "app": data["app"],
                 "arg": data["arg"], "putt": data["putt"]}
 
-    # Fuzzy match across all aliases
+    # 3. Fuzzy match across all aliases
     all_aliases = list(_ALIAS_MAP.keys())
     close = difflib.get_close_matches(query, all_aliases, n=1, cutoff=0.60)
     if close:
         canonical = _ALIAS_MAP[close[0]]
         data = COURSE_DATABASE[canonical]
-        log.info(f"  Course match: '{course_name}' -> '{canonical}' (fuzzy via '{close[0]}')")
+        log.info(f"  Course match: '{course_name}' -> '{canonical}' (hardcoded fuzzy via '{close[0]}')")
         return {"ott": data["ott"], "app": data["app"],
                 "arg": data["arg"], "putt": data["putt"]}
 
@@ -260,10 +313,12 @@ def apply_course_fit(
     course_name: str,
     db,
     alpha: float = 0.30,
+    avg_wind_mph: float = 0.0,
 ) -> pd.DataFrame:
     """
     Adjust sg_composite for course fit by blending a course-specific composite
-    with the existing sg_composite score.
+    with the existing sg_composite score. Optionally further adjusts weights
+    for wind conditions.
 
     Parameters
     ----------
@@ -277,6 +332,9 @@ def apply_course_fit(
     alpha : float
         Blend weight for course fit. 0.0 = no adjustment, 1.0 = pure course fit.
         Default 0.30 means 70% original composite + 30% course-fit adjustment.
+    avg_wind_mph : float
+        Average wind speed during playing hours (mph). When > 8 mph, weights are
+        blended toward approach-heavy profile. 0.0 = no wind adjustment.
 
     Returns
     -------
@@ -297,11 +355,25 @@ def apply_course_fit(
         log.warning("  apply_course_fit: received empty DataFrame, skipping.")
         return field_df
 
-    # Resolve course weights
-    weights = get_course_weights(course_name)
+    # Resolve course weights — try MongoDB data-driven first, then hardcoded
+    weights = get_course_weights(course_name, db=db)
     if weights is None:
         log.warning(f"  Course '{course_name}' not in database. Returning field unchanged.")
         return field_df
+
+    # Apply wind adjustment if wind data provided
+    if avg_wind_mph > 0:
+        from data.weather import wind_adjust_weights
+        orig_weights = dict(weights)
+        weights = wind_adjust_weights(weights, avg_wind_mph)
+        if weights != orig_weights:
+            log.info(
+                f"  Wind adjustment ({avg_wind_mph:.1f} mph): "
+                f"OTT {orig_weights['ott']:.3f}->{weights['ott']:.3f}  "
+                f"APP {orig_weights['app']:.3f}->{weights['app']:.3f}  "
+                f"ARG {orig_weights['arg']:.3f}->{weights['arg']:.3f}  "
+                f"PUT {orig_weights['putt']:.3f}->{weights['putt']:.3f}"
+            )
 
     df = field_df.copy()
     sg_cols = ["sg_ott", "sg_app", "sg_arg", "sg_putt"]

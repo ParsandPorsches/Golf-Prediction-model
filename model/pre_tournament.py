@@ -28,6 +28,7 @@ from config.settings import (
 from model.sg_composite import SGWeights, build_live_field_scores, get_current_field_ids
 from model.course_fit import apply_course_fit
 from model.recency import apply_recency
+from model.course_history import apply_course_history
 from backtester.monte_carlo import simulate_tournament
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,8 @@ def run_prediction(
     top_n: int = 30,
     course_name: str = None,
     use_recency: bool = True,
+    weather_date: str = None,
+    use_course_history: bool = True,
 ):
     """
     Full pipeline: load field -> score -> (recency adjust) -> (course adjust)
@@ -109,6 +112,9 @@ def run_prediction(
         Course name for course-fit adjustment. If None, course fit is skipped.
     use_recency : bool
         Whether to apply recency-weighted skill adjustment. Default True.
+    weather_date : str, optional
+        First round date 'YYYY-MM-DD'. If provided (along with course_name),
+        fetches wind forecast and adjusts course-fit weights accordingly.
     """
 
     # Get current field
@@ -145,8 +151,30 @@ def run_prediction(
 
     # Course fit: adjust composite using venue-specific SG weights
     if course_name:
-        field_scores = apply_course_fit(field_scores, course_name, db)
+        avg_wind_mph = 0.0
+        if weather_date:
+            try:
+                from data.weather import get_tournament_wind
+                wind_data = get_tournament_wind(course_name, weather_date)
+                if wind_data:
+                    avg_wind_mph = wind_data["avg_mph"]
+                    log.info(
+                        f"Weather: {wind_data['condition'].upper()} "
+                        f"({avg_wind_mph} mph avg, {wind_data['max_mph']} mph max gusts)"
+                    )
+                else:
+                    log.warning("Weather data unavailable — using course fit weights only.")
+            except Exception as exc:
+                log.warning(f"Weather fetch failed: {exc}")
+
+        field_scores = apply_course_fit(field_scores, course_name, db,
+                                        avg_wind_mph=avg_wind_mph)
         log.info(f"Course fit applied for {course_name}")
+
+    # Course history: reward/fade players based on venue track record
+    if use_course_history and event_name:
+        field_scores = apply_course_history(field_scores, event_name, db)
+        log.info("Course history applied")
 
     # Run Monte Carlo
     log.info(f"Running {N_SIMULATIONS:,} simulations...")
@@ -258,6 +286,23 @@ def main():
         default=False,
         help="Disable recency-weighted skill adjustment.",
     )
+    parser.add_argument(
+        "--weather",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "First round date for wind forecast (requires --course). "
+            "Fetches Open-Meteo forecast and adjusts course-fit weights for wind. "
+            "Example: --weather 2026-04-10"
+        ),
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        default=False,
+        help="Disable course history adjustment.",
+    )
     args = parser.parse_args()
 
     run_prediction(
@@ -265,6 +310,8 @@ def main():
         top_n=args.top,
         course_name=args.course,
         use_recency=not args.no_recency,
+        weather_date=args.weather,
+        use_course_history=not args.no_history,
     )
 
 
