@@ -8,6 +8,8 @@ Usage:
     python model/pre_tournament.py                        # current week
     python model/pre_tournament.py --event_name "houston"
     python model/pre_tournament.py --top 20
+    python model/pre_tournament.py --course "TPC Sawgrass"
+    python model/pre_tournament.py --course "Augusta National" --no-recency
 """
 
 import sys
@@ -24,6 +26,8 @@ from config.settings import (
     N_SIMULATIONS, RANDOM_SEED, EDGE_THRESHOLDS,
 )
 from model.sg_composite import SGWeights, build_live_field_scores, get_current_field_ids
+from model.course_fit import apply_course_fit
+from model.recency import apply_recency
 from backtester.monte_carlo import simulate_tournament
 
 log = logging.getLogger(__name__)
@@ -44,11 +48,17 @@ def load_best_weights() -> SGWeights:
     return SGWeights(sg_ott=0.20, sg_app=0.40, sg_arg=0.25, sg_putt=0.15)
 
 
-def save_predictions(sim_results: pd.DataFrame, event_id, event_name: str, weights: SGWeights):
+def save_predictions(
+    sim_results: pd.DataFrame,
+    event_id,
+    event_name: str,
+    weights: SGWeights,
+    course_name: str = None,
+):
     """Store predictions in MongoDB."""
     docs = []
     for _, row in sim_results.iterrows():
-        docs.append({
+        doc = {
             "event_id":      event_id,
             "event_name":    event_name,
             "year":          datetime.now().year,
@@ -64,15 +74,42 @@ def save_predictions(sim_results: pd.DataFrame, event_id, event_name: str, weigh
             "weights":       weights.as_dict(),
             "n_sims":        N_SIMULATIONS,
             "generated_at":  datetime.now(),
-        })
+        }
+        # Persist course name if course fit was applied
+        if course_name:
+            doc["course_name"] = course_name
+        # Persist original sg_composite before any adjustments
+        if "sg_composite_original" in row:
+            doc["sg_composite_original"] = float(row.get("sg_composite_original", 0))
+        docs.append(doc)
+
     if docs:
         db[COLLECTIONS["model_predictions"]].delete_many({"event_id": event_id})
         db[COLLECTIONS["model_predictions"]].insert_many(docs)
         log.info(f"  Saved {len(docs)} predictions to MongoDB")
 
 
-def run_prediction(event_name_filter: str = None, top_n: int = 30):
-    """Full pipeline: load field → score → simulate → print → save."""
+def run_prediction(
+    event_name_filter: str = None,
+    top_n: int = 30,
+    course_name: str = None,
+    use_recency: bool = True,
+):
+    """
+    Full pipeline: load field -> score -> (recency adjust) -> (course adjust)
+    -> simulate -> print -> save.
+
+    Parameters
+    ----------
+    event_name_filter : str, optional
+        Partial event name for display confirmation only (does not filter field).
+    top_n : int
+        Number of players to display in the output table.
+    course_name : str, optional
+        Course name for course-fit adjustment. If None, course fit is skipped.
+    use_recency : bool
+        Whether to apply recency-weighted skill adjustment. Default True.
+    """
 
     # Get current field
     dg_ids, event_name = get_current_field_ids()
@@ -99,17 +136,42 @@ def run_prediction(event_name_filter: str = None, top_n: int = 30):
         log.error("Could not build field scores.")
         return pd.DataFrame()
 
+    # --- Additive adjustments (applied before simulation) ---
+
+    # Recency decay: blend multi-period DataGolf ratings into composite
+    if use_recency:
+        field_scores = apply_recency(field_scores, db, weights)
+        log.info("Recency decay applied")
+
+    # Course fit: adjust composite using venue-specific SG weights
+    if course_name:
+        field_scores = apply_course_fit(field_scores, course_name, db)
+        log.info(f"Course fit applied for {course_name}")
+
     # Run Monte Carlo
     log.info(f"Running {N_SIMULATIONS:,} simulations...")
     sim_results = simulate_tournament(field_scores, n_sims=N_SIMULATIONS, seed=RANDOM_SEED)
 
-    # Print results table
-    print(f"\n{'='*72}")
+    # --- Print results table ---
+    separator = "=" * 72
+    divider   = "-" * 72
+
+    print(f"\n{separator}")
     print(f"  {event_name}")
+    if course_name:
+        print(f"  Course: {course_name}")
+    adjustments = []
+    if use_recency:
+        adjustments.append("recency")
+    if course_name:
+        adjustments.append("course fit")
+    adj_label = (f"  Adjustments: {', '.join(adjustments)}" if adjustments
+                 else "  Adjustments: none")
+    print(adj_label)
     print(f"  Model: {N_SIMULATIONS:,} simulations  |  {len(dg_ids)} players")
-    print(f"{'='*72}")
+    print(separator)
     print(f"{'PLAYER':<28} {'WIN%':>6} {'TOP5%':>6} {'TOP10%':>7} {'TOP20%':>7} {'CUT%':>6} {'SG':>6}")
-    print(f"{'-'*72}")
+    print(divider)
 
     for _, row in sim_results.head(top_n).iterrows():
         name = str(row.get("player_name", "?"))
@@ -128,14 +190,14 @@ def run_prediction(event_name_filter: str = None, top_n: int = 30):
             f"  {row.get('sg_composite', 0):>+5.2f}"
         )
 
-    print(f"{'-'*72}")
+    print(divider)
     print(f"  Win probs sum: {sim_results['win_prob'].sum()*100:.1f}%")
 
     # Compare model vs DataGolf where available
     if "dg_win_prob" in sim_results.columns:
-        print(f"\n{'-'*72}")
+        print(f"\n{divider}")
         print("  MODEL vs DATAGOLF WIN PROBABILITY (top 15 divergences)")
-        print(f"{'-'*72}")
+        print(divider)
         print(f"  {'PLAYER':<28} {'MODEL':>7} {'DATAGOLF':>9} {'DIFF':>7}")
         diff = sim_results.copy()
         diff["diff"] = diff["win_prob"] - diff["dg_win_prob"]
@@ -158,18 +220,52 @@ def run_prediction(event_name_filter: str = None, top_n: int = 30):
             {"event_name": {"$regex": event_name, "$options": "i"}}
         )
         event_id = sched.get("event_id") if sched else None
-    save_predictions(sim_results, event_id, event_name, weights)
+
+    save_predictions(sim_results, event_id, event_name, weights, course_name=course_name)
 
     log.info("\nDone. Run live/odds_scraper.py to compare against bookmaker odds.")
     return sim_results
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--event_name", type=str, default=None)
-    parser.add_argument("--top", type=int, default=30)
+    parser = argparse.ArgumentParser(
+        description="Run the pre-tournament golf prediction model."
+    )
+    parser.add_argument(
+        "--event_name",
+        type=str,
+        default=None,
+        help="Partial event name for confirmation (does not filter field).",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=30,
+        help="Number of players to display (default: 30).",
+    )
+    parser.add_argument(
+        "--course",
+        type=str,
+        default=None,
+        help=(
+            "Course name to apply course-fit adjustment "
+            "(e.g., 'TPC Sawgrass', 'Augusta National')."
+        ),
+    )
+    parser.add_argument(
+        "--no-recency",
+        action="store_true",
+        default=False,
+        help="Disable recency-weighted skill adjustment.",
+    )
     args = parser.parse_args()
-    run_prediction(event_name_filter=args.event_name, top_n=args.top)
+
+    run_prediction(
+        event_name_filter=args.event_name,
+        top_n=args.top,
+        course_name=args.course,
+        use_recency=not args.no_recency,
+    )
 
 
 if __name__ == "__main__":
