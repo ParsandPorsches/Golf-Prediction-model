@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Golf Model — Bet Report (Event 20)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1923;
+    color: #e0e6ed;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: #7a8a99;
+    font-size: 0.85rem;
+    margin-bottom: 28px;
+  }
+
+  /* Summary cards */
+  .summary {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .card {
+    background: #1a2634;
+    border: 1px solid #253545;
+    border-radius: 10px;
+    padding: 16px 24px;
+    min-width: 130px;
+    text-align: center;
+  }
+  .card .label { font-size: 0.72rem; color: #7a8a99; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+  .card .value { font-size: 1.6rem; font-weight: 700; color: #fff; }
+  .card .value.profit  { color: #2ecc71; }
+  .card .value.loss-text { color: #e74c3c; }
+
+  /* Legend */
+  .legend {
+    font-size: 0.78rem;
+    color: #7a8a99;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    background: rgba(46,204,113,0.15);
+    border: 1px solid rgba(46,204,113,0.4);
+    display: inline-block;
+  }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid #253545; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  thead tr { background: #1a2634; }
+  thead th {
+    padding: 12px 14px;
+    text-align: left;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: #7a8a99;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  thead th:hover { color: #c0cdd8; }
+  thead th::after { content: ' \2195'; opacity: .3; }
+  tbody tr { border-top: 1px solid #1e2d3d; transition: background .12s; }
+  tbody tr:hover { background: #1e2d3d; }
+  tbody tr.actionable { background: rgba(46,204,113,0.05); }
+  tbody tr.actionable:hover { background: rgba(46,204,113,0.10); }
+  td { padding: 10px 14px; vertical-align: middle; }
+
+  .player { font-weight: 600; color: #fff; white-space: nowrap; }
+  .market-tag {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #253545;
+    color: #a0b0c0;
+    white-space: nowrap;
+  }
+  .edge      { color: #2ecc71; font-weight: 700; }
+  .odds      { color: #f39c12; font-weight: 600; font-family: monospace; }
+  .kelly-pos { color: #2ecc71; font-weight: 700; }
+  .neutral   { color: #7a8a99; }
+  .profit    { color: #2ecc71; font-weight: 700; }
+  .loss-text { color: #e74c3c; font-weight: 700; }
+
+  .badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .badge.win     { background: rgba(46,204,113,.2); color: #2ecc71; }
+  .badge.loss    { background: rgba(231,76, 60,.2); color: #e74c3c; }
+  .badge.void    { background: rgba(149,165,166,.2); color: #95a5a6; }
+  .badge.pending { background: rgba(241,196,15,.15); color: #f1c40f; }
+
+  .footer {
+    margin-top: 20px;
+    font-size: 0.75rem;
+    color: #3d5066;
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+
+<h1>Golf Model &mdash; Value Bet Report</h1>
+<div class="subtitle">Event ID 20 &nbsp;&bull;&nbsp; Generated March 27, 2026 08:50 PM</div>
+
+<div class="summary">
+  <div class="card">
+    <div class="label">Total Bets</div>
+    <div class="value">43</div>
+  </div>
+  <div class="card">
+    <div class="label">Actionable</div>
+    <div class="value" style="color:#f1c40f">13</div>
+  </div>
+  <div class="card">
+    <div class="label">Wins</div>
+    <div class="value profit">0</div>
+  </div>
+  <div class="card">
+    <div class="label">Losses</div>
+    <div class="value loss-text">0</div>
+  </div>
+  <div class="card">
+    <div class="label">Net P&amp;L</div>
+    <div class="value profit">+0.00u</div>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="legend-dot"></span>
+  Highlighted rows = positive Kelly (actionable bets)
+  &nbsp;&bull;&nbsp; Click any column header to sort
+</div>
+
+<div class="table-wrap">
+<table id="betTable">
+  <thead>
+    <tr>
+      <th onclick="sortTable(0)">Player</th>
+      <th onclick="sortTable(1)">Market</th>
+      <th onclick="sortTable(2)">Model %</th>
+      <th onclick="sortTable(3)">Book %</th>
+      <th onclick="sortTable(4)">Edge</th>
+      <th onclick="sortTable(5)">Odds</th>
+      <th onclick="sortTable(6)">Kelly</th>
+      <th onclick="sortTable(7)">Outcome</th>
+      <th onclick="sortTable(8)">P&amp;L</th>
+    </tr>
+  </thead>
+  <tbody>
+
+        <tr class="">
+            <td class="player">Min Woo Lee</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>34.5%</td>
+            <td>5.4%</td>
+            <td class="edge">+29.0%</td>
+            <td class="odds">-370</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Chris Gotterup</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>25.6%</td>
+            <td>1.3%</td>
+            <td class="edge">+24.3%</td>
+            <td class="odds">+434</td>
+            <td class="kelly-pos">2.1%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Kurt Kitayama</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>24.0%</td>
+            <td>1.1%</td>
+            <td class="edge">+22.8%</td>
+            <td class="odds">+500</td>
+            <td class="kelly-pos">2.2%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Sam Burns</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>22.9%</td>
+            <td>1.2%</td>
+            <td class="edge">+21.6%</td>
+            <td class="odds">+470</td>
+            <td class="kelly-pos">1.6%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Jake Knapp</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>24.7%</td>
+            <td>3.1%</td>
+            <td class="edge">+21.6%</td>
+            <td class="odds">+120</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Ben Griffin</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>20.1%</td>
+            <td>0.7%</td>
+            <td class="edge">+19.4%</td>
+            <td class="odds">+960</td>
+            <td class="kelly-pos">2.9%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Nicolai Hojgaard</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>24.6%</td>
+            <td>5.5%</td>
+            <td class="edge">+19.1%</td>
+            <td class="odds">-384</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Harris English</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>18.6%</td>
+            <td>1.0%</td>
+            <td class="edge">+17.6%</td>
+            <td class="odds">+590</td>
+            <td class="kelly-pos">1.2%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Sahith Theegala</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>18.5%</td>
+            <td>2.5%</td>
+            <td class="edge">+16.0%</td>
+            <td class="odds">+177</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Keith Mitchell</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>18.5%</td>
+            <td>2.5%</td>
+            <td class="edge">+16.0%</td>
+            <td class="odds">+172</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Jordan Smith</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>15.7%</td>
+            <td>0.5%</td>
+            <td class="edge">+15.2%</td>
+            <td class="odds">+1400</td>
+            <td class="kelly-pos">2.4%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Michael Thorbjornsen</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>19.4%</td>
+            <td>4.3%</td>
+            <td class="edge">+15.2%</td>
+            <td class="odds">-163</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Rasmus Hojgaard</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>16.8%</td>
+            <td>1.8%</td>
+            <td class="edge">+15.0%</td>
+            <td class="odds">+285</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Shane Lowry</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>16.1%</td>
+            <td>1.3%</td>
+            <td class="edge">+14.7%</td>
+            <td class="odds">+420</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Sam Stevens</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>18.4%</td>
+            <td>4.0%</td>
+            <td class="edge">+14.4%</td>
+            <td class="odds">-135</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Harry Hall</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>15.7%</td>
+            <td>1.4%</td>
+            <td class="edge">+14.2%</td>
+            <td class="odds">+384</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Adam Scott</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>16.4%</td>
+            <td>3.4%</td>
+            <td class="edge">+12.9%</td>
+            <td class="odds">+102</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Ricky Castillo</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>13.6%</td>
+            <td>1.2%</td>
+            <td class="edge">+12.4%</td>
+            <td class="odds">+495</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Alex Smalley</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>12.6%</td>
+            <td>1.8%</td>
+            <td class="edge">+10.8%</td>
+            <td class="odds">+285</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Christiaan Bezuidenhout</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>11.4%</td>
+            <td>0.6%</td>
+            <td class="edge">+10.8%</td>
+            <td class="odds">+1100</td>
+            <td class="kelly-pos">0.8%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Mac Meissner</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>11.4%</td>
+            <td>0.6%</td>
+            <td class="edge">+10.8%</td>
+            <td class="odds">+1000</td>
+            <td class="kelly-pos">0.6%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Michael Brennan</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>10.8%</td>
+            <td>1.0%</td>
+            <td class="edge">+9.8%</td>
+            <td class="odds">+620</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Sungjae Im</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>10.5%</td>
+            <td>0.8%</td>
+            <td class="edge">+9.8%</td>
+            <td class="odds">+819</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Tom Kim</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>11.1%</td>
+            <td>1.4%</td>
+            <td class="edge">+9.7%</td>
+            <td class="odds">+395</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Stephan Jaeger</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>10.9%</td>
+            <td>1.6%</td>
+            <td class="edge">+9.3%</td>
+            <td class="odds">+325</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Rico Hoey</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>10.4%</td>
+            <td>1.5%</td>
+            <td class="edge">+8.9%</td>
+            <td class="odds">+350</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Thorbjorn Olesen</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>9.1%</td>
+            <td>1.0%</td>
+            <td class="edge">+8.2%</td>
+            <td class="odds">+620</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Max McGreevy</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>9.2%</td>
+            <td>1.4%</td>
+            <td class="edge">+7.9%</td>
+            <td class="odds">+409</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Lee Hodges</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.6%</td>
+            <td>0.3%</td>
+            <td class="edge">+7.3%</td>
+            <td class="odds">+2000</td>
+            <td class="kelly-pos">0.8%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Tony Finau</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>8.2%</td>
+            <td>1.1%</td>
+            <td class="edge">+7.1%</td>
+            <td class="odds">+509</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Jason Day</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>11.6%</td>
+            <td>4.8%</td>
+            <td class="edge">+6.9%</td>
+            <td class="odds">-222</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">William Mouw</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.3%</td>
+            <td>0.5%</td>
+            <td class="edge">+6.8%</td>
+            <td class="odds">+1175</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Adrien Dumont De Chassart</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.9%</td>
+            <td>1.3%</td>
+            <td class="edge">+6.5%</td>
+            <td class="odds">+420</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">John Parry</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>6.6%</td>
+            <td>0.3%</td>
+            <td class="edge">+6.3%</td>
+            <td class="odds">+2150</td>
+            <td class="kelly-pos">0.6%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Denny McCarthy</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.1%</td>
+            <td>0.9%</td>
+            <td class="edge">+6.2%</td>
+            <td class="odds">+670</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Matti Schmid</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.0%</td>
+            <td>0.9%</td>
+            <td class="edge">+6.1%</td>
+            <td class="odds">+690</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Kevin Roy</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>6.3%</td>
+            <td>0.3%</td>
+            <td class="edge">+6.0%</td>
+            <td class="odds">+2250</td>
+            <td class="kelly-pos">0.5%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Matt Wallace</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.7%</td>
+            <td>1.9%</td>
+            <td class="edge">+5.8%</td>
+            <td class="odds">+265</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Jesper Svensson</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>6.3%</td>
+            <td>0.6%</td>
+            <td class="edge">+5.8%</td>
+            <td class="odds">+1125</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Sudarshan Yellamaraju</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>7.0%</td>
+            <td>1.4%</td>
+            <td class="edge">+5.6%</td>
+            <td class="odds">+390</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="">
+            <td class="player">Johnny Keefer</td>
+            <td><span class="market-tag">TOP 10</span></td>
+            <td>6.6%</td>
+            <td>1.2%</td>
+            <td class="edge">+5.4%</td>
+            <td class="odds">+495</td>
+            <td class="neutral">0.0%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Chris Gotterup</td>
+            <td><span class="market-tag">WIN</span></td>
+            <td>3.8%</td>
+            <td>0.4%</td>
+            <td class="edge">+3.4%</td>
+            <td class="odds">+20000</td>
+            <td class="kelly-pos">0.8%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+
+        <tr class="actionable">
+            <td class="player">Kurt Kitayama</td>
+            <td><span class="market-tag">WIN</span></td>
+            <td>3.4%</td>
+            <td>0.3%</td>
+            <td class="edge">+3.0%</td>
+            <td class="odds">+26000</td>
+            <td class="kelly-pos">0.7%</td>
+            <td><span class="badge pending">PENDING</span></td>
+            <td class="neutral">—</td>
+        </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="footer">Golf Model v3 &nbsp;&bull;&nbsp; DraftKings odds &nbsp;&bull;&nbsp; Quarter-Kelly sizing</div>
+
+<script>
+  let sortDir = {};
+  function sortTable(col) {
+    const table = document.getElementById('betTable');
+    const tbody = table.querySelector('tbody');
+    const rows  = Array.from(tbody.querySelectorAll('tr'));
+    const asc   = !sortDir[col];
+    sortDir = {};
+    sortDir[col] = asc;
+
+    rows.sort((a, b) => {
+      const va = a.cells[col].innerText.trim().replace(/[+%u]/g,'');
+      const vb = b.cells[col].innerText.trim().replace(/[+%u]/g,'');
+      const na = parseFloat(va), nb = parseFloat(vb);
+      if (!isNaN(na) && !isNaN(nb)) return asc ? na - nb : nb - na;
+      return asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  }
+</script>
+</body>
+</html>
