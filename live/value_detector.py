@@ -29,6 +29,66 @@ db = client[DB_NAME]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Line movement
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_opening_odds(event_id: int) -> dict:
+    """
+    Load the opening odds snapshot for each (market, book).
+
+    Returns a nested dict:
+        {(market, book): {player_name_lower: decimal_odds, ...}, ...}
+    """
+    docs = list(db[COLLECTIONS["odds_snapshots"]].find(
+        {"event_id": event_id, "is_opening": True}
+    ))
+    if not docs:
+        return {}
+
+    opening = {}
+    for doc in docs:
+        key = (doc["market"], doc["book"])
+        player_odds = {}
+        for p in doc.get("odds", []):
+            name = (p.get("player_name") or "").strip().lower()
+            odds = p.get("decimal_odds")
+            if name and odds:
+                player_odds[name] = float(odds)
+        opening[key] = player_odds
+
+    return opening
+
+
+def compute_movement(
+    current_odds: float,
+    opening_odds: float,
+) -> tuple:
+    """
+    Compute line movement between opening and current decimal odds.
+
+    Returns (movement_pct, direction):
+        movement_pct: % change in implied probability (positive = shortening)
+        direction: "STEAM" (sharp money, odds shortening),
+                   "DRIFT" (odds lengthening),
+                   or None (minimal movement)
+    """
+    if not opening_odds or opening_odds <= 1.0 or not current_odds or current_odds <= 1.0:
+        return 0.0, None
+
+    opening_imp = 1.0 / opening_odds
+    current_imp = 1.0 / current_odds
+    movement = current_imp - opening_imp  # positive = odds shortened (more likely)
+
+    # Threshold: 1.5% implied probability shift to flag
+    if movement > 0.015:
+        return round(movement, 4), "STEAM"
+    elif movement < -0.015:
+        return round(movement, 4), "DRIFT"
+
+    return round(movement, 4), None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Load model predictions + live odds
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -94,13 +154,17 @@ def detect_value(
     predictions: pd.DataFrame,
     live_odds: pd.DataFrame,
     thresholds: dict = EDGE_THRESHOLDS,
+    opening_odds: dict = None,
 ) -> pd.DataFrame:
     """
     Cross-reference model predictions with no-vig odds.
-    Returns all bets with edge above threshold.
+    Returns all bets with edge above threshold, annotated with line movement.
     """
     if predictions.empty or live_odds.empty:
         return pd.DataFrame()
+
+    if opening_odds is None:
+        opening_odds = {}
 
     value_bets = []
 
@@ -133,8 +197,17 @@ def detect_value(
         # Convert to American odds for reference
         american_odds = decimal_to_american(decimal_odds)
 
+        # Line movement: compare current odds to opening snapshot
+        player_name = odds_row.get("player_name") or player_pred["player_name"].iloc[0]
+        book = odds_row.get("book")
+        opening_key = (market, book)
+        opening_player_odds = opening_odds.get(opening_key, {})
+        open_decimal = opening_player_odds.get(str(player_name).strip().lower(), 0)
+
+        movement_pct, movement_dir = compute_movement(decimal_odds, open_decimal)
+
         value_bets.append({
-            "player_name":   odds_row.get("player_name") or player_pred["player_name"].iloc[0],
+            "player_name":   player_name,
             "dg_id":         dg_id,
             "market":        market,
             "model_prob":    round(model_prob, 4),
@@ -143,7 +216,10 @@ def detect_value(
             "decimal_odds":  decimal_odds,
             "american_odds": american_odds,
             "fair_odds":     fair_odds,
-            "book":          odds_row.get("book"),
+            "book":          book,
+            "opening_odds":  open_decimal if open_decimal > 0 else None,
+            "movement_pct":  movement_pct,
+            "movement_dir":  movement_dir,
             "detected_at":   datetime.utcnow(),
         })
 
@@ -196,7 +272,14 @@ def run_value_scan(event_id: int, year: int, send_discord: bool = True):
         log.error("No live odds found. Run live/odds_scraper.py first.")
         return
 
-    value_bets = detect_value(predictions, live_odds)
+    # Load opening odds for line movement comparison
+    opening = load_opening_odds(event_id)
+    if opening:
+        log.info(f"Opening odds loaded for {len(opening)} market/book combos")
+    else:
+        log.info("No opening odds snapshot found — line movement unavailable")
+
+    value_bets = detect_value(predictions, live_odds, opening_odds=opening)
 
     if value_bets.empty:
         log.info("No value bets found above threshold.")
@@ -211,6 +294,25 @@ def run_value_scan(event_id: int, year: int, send_discord: bool = True):
     print(f"VALUE BETS --- Event {event_id} / {year}")
     print(f"{'='*75}")
     for _, bet in value_bets.iterrows():
+        # Line movement info
+        movement_str = ""
+        if bet.get("opening_odds") and bet["opening_odds"] > 0:
+            open_am = decimal_to_american(bet["opening_odds"])
+            direction = bet.get("movement_dir")
+            if direction == "STEAM":
+                arrow = "<<"
+                tag = "STEAM"
+            elif direction == "DRIFT":
+                arrow = ">>"
+                tag = "DRIFT"
+            else:
+                arrow = "=="
+                tag = "HOLD"
+            movement_str = (
+                f"\n  Line: {open_am} -> {bet['american_odds']} "
+                f"({arrow} {tag}, {bet['movement_pct']*100:+.1f}% implied)"
+            )
+
         print(
             f"\n  {bet['player_name']:<28} | {bet['market'].upper():<10}"
             f"\n  Model: {bet['model_prob']*100:.1f}%  |  "
@@ -220,6 +322,7 @@ def run_value_scan(event_id: int, year: int, send_discord: bool = True):
             f"Fair: {bet['fair_odds']:.2f}  |  "
             f"Book: {bet['book'].upper()}  |  "
             f"Kelly: {bet['kelly_pct']*100:.1f}% bankroll"
+            f"{movement_str}"
         )
 
     # Send Discord alert

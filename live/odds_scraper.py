@@ -8,9 +8,9 @@ Usage:
     python live/odds_scraper.py --event_id 28 --sport_key golf_masters_tournament_winner
 
     # Regular events (CSV):
-    python live/odds_scraper.py --event_id 20 --csv files/odds_houston_2026.csv
+    python live/odds_scraper.py --event_id 20 --csv outputs/2026_event-name/odds.csv
 
-CSV format (see files/odds_houston_2026.csv for template):
+CSV format (player_name, market, book, decimal_odds):
     player_name, market, book, decimal_odds
     Min Woo Lee, win, draftkings, 18.00
     Min Woo Lee, top_10, draftkings, 3.50
@@ -42,6 +42,32 @@ client = MongoClient(MONGODB_URI)
 db = client[DB_NAME]
 
 VALID_MARKETS = set(ODDS_MARKETS)
+
+
+# =============================================================================
+# Snapshot history (line movement tracking)
+# =============================================================================
+
+def _save_snapshot(event_id: int, market: str, book: str, odds_list: list):
+    """
+    Append a timestamped odds snapshot to odds_snapshots.
+    The first snapshot for a given (event_id, market, book) is tagged as
+    the opening line. Subsequent snapshots are tagged as updates.
+    """
+    col = db[COLLECTIONS["odds_snapshots"]]
+    fk = {"event_id": event_id, "market": market, "book": book}
+
+    is_opening = col.count_documents(fk, limit=1) == 0
+
+    col.insert_one({
+        **fk,
+        "odds":        odds_list,
+        "snapshot_at": datetime.utcnow(),
+        "is_opening":  is_opening,
+    })
+
+    tag = "opening" if is_opening else "update"
+    log.debug(f"  Snapshot ({tag}): {market}/{book} — {len(odds_list)} players")
 
 
 # =============================================================================
@@ -124,6 +150,7 @@ def load_from_csv(csv_path: str, event_id: int) -> int:
         }
         fk = {"event_id": event_id, "market": market, "book": book}
         db[COLLECTIONS["live_odds"]].update_one(fk, {"$set": doc}, upsert=True)
+        _save_snapshot(event_id, market, book, odds_list)
         stored += 1
         log.info(f"  {market} / {book}: {len(odds_list)} players stored")
 
@@ -181,6 +208,7 @@ def parse_and_store_api(raw_events: list, market: str, event_id: int) -> int:
                 }
                 fk = {"event_id": event_id, "market": market, "book": book}
                 db[COLLECTIONS["live_odds"]].update_one(fk, {"$set": doc}, upsert=True)
+                _save_snapshot(event_id, market, book, odds_list)
                 stored += 1
 
     return stored

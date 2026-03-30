@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python extraction/espn_results.py --years 2019 2020 2021 2022 2023 2025)",
+      "Bash(python backtester/log_likelihood_optimizer.py)",
+      "Bash(python -c \":*)",
+      "Bash(python -c \"from pymongo import MongoClient; from config.settings import MONGODB_URI, DB_NAME; db = MongoClient\\(MONGODB_URI\\)[DB_NAME]; doc = db[''dg_current_field''].find_one\\({}, {''event_id'':1,''event_name'':1,''year'':1}\\); print\\(doc\\)\")",
+      "Bash(python live/odds_scraper.py --event_id 20 --csv files/odds_houston_2026.csv)",
+      "Bash(python live/value_detector.py --event_id 20 --no-discord)",
+      "Bash(gh auth:*)",
+      "Bash(python analysis/bet_report.py --event_id 20 --open)",
+      "WebFetch(domain:parsandporsches.github.io)",
+      "Bash(python model/pre_tournament.py --course \"memorial park\")",
+      "Bash(python -c \"from config.settings import DATAGOLF_API_KEY; print\\(''Key loaded:'', bool\\(DATAGOLF_API_KEY\\), ''| Length:'', len\\(DATAGOLF_API_KEY\\)\\)\")",
+      "Bash(python -c \"from dotenv import load_dotenv; import os; load_dotenv\\(dotenv_path=''.env'', override=True\\); print\\(os.getenv\\(''DATAGOLF_API_KEY'', ''NOT FOUND''\\)\\)\")",
+      "Bash(python -c \"from config.settings import DATAGOLF_API_KEY; print\\(''Key loaded:'', bool\\(DATAGOLF_API_KEY\\)\\)\")",
+      "Bash(python live/live_model.py --event_id 20 --no-discord)",
+      "Bash(\"C:/Users/gweeks/Desktop/golf-model-v3/files/odds_houston_2026.csv\":*)",
+      "Bash(python analysis/course_fit_builder.py --min-events 2 --min-players 10)",
+      "Bash(python analysis/course_fit_builder.py --min-events 2 --min-players 10 --save)",
+      "Bash(python data/weather.py --course \"Augusta National\" --date 2026-04-10)",
+      "Bash(curl -s \"https://api.open-meteo.com/v1/forecast?latitude=33.5021&longitude=-82.0232&hourly=wind_speed_10m&start_date=2026-04-10&end_date=2026-04-13&timezone=America/New_York\")",
+      "Bash(python data/weather.py --course \"Augusta National\" --date 2026-04-09)",
+      "Bash(python data/weather.py --course \"The Open\" --date 2026-07-16)",
+      "Bash(python data/weather.py --course \"THE PLAYERS Championship\" --date 2026-03-12)",
+      "Bash(python model/pre_tournament.py --course \"Texas Children''''s Houston Open\" --weather 2026-03-26)",
+      "Bash(python live/sharp_money.py --event masters --top 20)",
+      "Bash(python live/sharp_money.py --event masters --top 30 --min-gap 1.0)",
+      "Bash(python live/odds_scraper.py --file files/odds_houston_2026.csv --event_id 20)",
+      "Bash(python live/value_detector.py --event_id 20)"
+    ]
+  }
+}

@@ -3,11 +3,15 @@ analysis/bet_report.py
 -----------------------
 Generates a clean HTML report from the bet_log collection.
 
+Output is written to:
+    outputs/{year}_{event-slug}/bet_report.html
+
 Usage:
     python analysis/bet_report.py --event_id 20
     python analysis/bet_report.py --event_id 20 --open   # auto-opens in browser
 """
 
+import re
 import sys
 import argparse
 import webbrowser
@@ -21,6 +25,18 @@ from config.settings import MONGODB_URI, DB_NAME, COLLECTIONS
 
 client = MongoClient(MONGODB_URI)
 db = client[DB_NAME]
+
+
+def event_output_dir(event_id: int) -> Path:
+    """Return (and create) outputs/{year}_{event-slug}/ for the given event."""
+    year = datetime.now().year
+    # Try to get event name from model_predictions
+    pred = db[COLLECTIONS["model_predictions"]].find_one({"event_id": event_id})
+    event_name = pred.get("event_name", f"event{event_id}") if pred else f"event{event_id}"
+    slug = re.sub(r"[^a-z0-9]+", "-", event_name.lower()).strip("-")
+    folder = Path("outputs") / f"{year}_{slug}"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def fetch_bets(event_id: int) -> list:
@@ -313,7 +329,8 @@ def main():
         return
 
     html     = generate_html(args.event_id, bets)
-    out_path = Path(f"files/bet_report_event{args.event_id}.html")
+    out_dir  = event_output_dir(args.event_id)
+    out_path = out_dir / "bet_report.html"
     out_path.write_text(html, encoding="utf-8")
     print(f"Report saved: {out_path.resolve()}")
 

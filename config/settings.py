@@ -26,6 +26,7 @@ COLLECTIONS = {
     "live_odds":             "live_odds",
     "bet_log":               "bet_log",
     "course_fit_profiles":   "course_fit_profiles",
+    "odds_snapshots":        "odds_snapshots",
 }
 
 # ── DataGolf API ───────────────────────────────────────────────────────────────
@@ -67,6 +68,13 @@ EDGE_TEST_THRESHOLDS = [0.03, 0.05, 0.08]
 N_SIMULATIONS = 10_000
 RANDOM_SEED = 42
 
+# ── Ensemble ──────────────────────────────────────────────────────────────────
+# Blend weight for DataGolf's model probabilities as a Bayesian prior.
+# 0.0 = pure Monte Carlo, 1.0 = pure DataGolf. Default 0.25 anchors our
+# sim results with DataGolf's well-calibrated baseline while preserving
+# the value of our course-fit, recency, and history adjustments.
+DG_ENSEMBLE_WEIGHT = 0.25
+
 # ── Bet sizing ─────────────────────────────────────────────────────────────────
 KELLY_FRACTION = 0.25   # Fractional Kelly — conservative, use 0.25–0.50
 MAX_BET_PCT = 0.05      # Never bet more than 5% of bankroll on one bet
@@ -79,6 +87,6 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
-REQUEST_DELAY_SECONDS = 1.0   # Sleep between DataGolf API calls
+REQUEST_DELAY_SECONDS = 3.0   # Sleep between DataGolf API calls (3s to avoid 429s)
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5.0

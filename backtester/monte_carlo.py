@@ -110,7 +110,8 @@ def simulate_tournament(
     # Merge player names and sg_composite back in
     merge_cols = ["dg_id", "player_name", "sg_composite"]
     # Also carry through DataGolf's own probs if present
-    for col in ["dg_win_prob", "dg_make_cut_prob", "dg_top10_prob"]:
+    for col in ["dg_win_prob", "dg_top5_prob", "dg_top10_prob",
+                "dg_top20_prob", "dg_make_cut_prob"]:
         if col in field_scores.columns:
             merge_cols.append(col)
 

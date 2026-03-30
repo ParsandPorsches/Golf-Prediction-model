@@ -24,11 +24,14 @@ sys.path.insert(0, ".")
 from config.settings import (
     MONGODB_URI, DB_NAME, COLLECTIONS,
     N_SIMULATIONS, RANDOM_SEED, EDGE_THRESHOLDS,
+    DG_ENSEMBLE_WEIGHT,
 )
 from model.sg_composite import SGWeights, build_live_field_scores, get_current_field_ids
 from model.course_fit import apply_course_fit
 from model.recency import apply_recency
 from model.course_history import apply_course_history
+from model.recent_form import apply_recent_form
+from model.cut_rules import get_cut_rule
 from backtester.monte_carlo import simulate_tournament
 
 log = logging.getLogger(__name__)
@@ -36,6 +39,71 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 
 client = MongoClient(MONGODB_URI)
 db = client[DB_NAME]
+
+
+def apply_ensemble(
+    sim_results: pd.DataFrame,
+    dg_weight: float = DG_ENSEMBLE_WEIGHT,
+) -> pd.DataFrame:
+    """
+    Blend Monte Carlo simulation probabilities with DataGolf's model
+    probabilities to produce an ensemble prediction.
+
+    For each market (win, top5, top10, top20, make_cut):
+      ensemble = (1 - dg_weight) * mc_prob + dg_weight * dg_prob
+
+    Probabilities are renormalized after blending so win probs sum to ~1.0.
+    Players missing DataGolf probs keep their pure MC values.
+
+    Parameters
+    ----------
+    sim_results : DataFrame from simulate_tournament()
+    dg_weight   : Blend weight for DataGolf (default from settings.py)
+
+    Returns
+    -------
+    DataFrame with blended probabilities and pre-ensemble columns preserved.
+    """
+    MARKET_PAIRS = [
+        ("win_prob",      "dg_win_prob"),
+        ("top5_prob",     "dg_top5_prob"),
+        ("top10_prob",    "dg_top10_prob"),
+        ("top20_prob",    "dg_top20_prob"),
+        ("make_cut_prob", "dg_make_cut_prob"),
+    ]
+
+    df = sim_results.copy()
+    blended_any = False
+
+    for mc_col, dg_col in MARKET_PAIRS:
+        if dg_col not in df.columns or mc_col not in df.columns:
+            continue
+
+        has_dg = df[dg_col].notna() & (df[dg_col] > 0)
+        if has_dg.sum() == 0:
+            continue
+
+        # Save pre-ensemble MC probability
+        df[f"{mc_col}_mc"] = df[mc_col]
+
+        # Blend where DG data exists
+        df.loc[has_dg, mc_col] = (
+            (1 - dg_weight) * df.loc[has_dg, mc_col]
+            + dg_weight * df.loc[has_dg, dg_col]
+        )
+        blended_any = True
+
+    # Renormalize win probs to sum to ~1.0
+    if blended_any and "win_prob" in df.columns:
+        win_sum = df["win_prob"].sum()
+        if win_sum > 0:
+            df["win_prob"] = df["win_prob"] / win_sum
+
+    if blended_any:
+        n = df[[dg_col for _, dg_col in MARKET_PAIRS if dg_col in df.columns]].notna().any(axis=1).sum()
+        log.info(f"  Ensemble applied: {dg_weight:.0%} DataGolf + {1-dg_weight:.0%} MC for {n} players")
+
+    return df.sort_values("win_prob", ascending=False).reset_index(drop=True)
 
 
 def load_best_weights() -> SGWeights:
@@ -74,8 +142,16 @@ def save_predictions(
             "dg_win_prob":   float(row.get("dg_win_prob", 0)),
             "weights":       weights.as_dict(),
             "n_sims":        N_SIMULATIONS,
+            "dg_ensemble_weight": DG_ENSEMBLE_WEIGHT if "win_prob_mc" in row else 0.0,
             "generated_at":  datetime.now(),
         }
+        # Persist pre-ensemble MC probabilities if ensemble was applied
+        if "win_prob_mc" in row:
+            doc["win_prob_mc"]      = float(row.get("win_prob_mc", 0))
+            doc["top5_prob_mc"]     = float(row.get("top5_prob_mc", 0))
+            doc["top10_prob_mc"]    = float(row.get("top10_prob_mc", 0))
+            doc["top20_prob_mc"]    = float(row.get("top20_prob_mc", 0))
+            doc["make_cut_prob_mc"] = float(row.get("make_cut_prob_mc", 0))
         # Persist course name if course fit was applied
         if course_name:
             doc["course_name"] = course_name
@@ -97,10 +173,12 @@ def run_prediction(
     use_recency: bool = True,
     weather_date: str = None,
     use_course_history: bool = True,
+    use_ensemble: bool = True,
+    use_recent_form: bool = True,
 ):
     """
     Full pipeline: load field -> score -> (recency adjust) -> (course adjust)
-    -> simulate -> print -> save.
+    -> (recent form) -> simulate -> (ensemble blend) -> print -> save.
 
     Parameters
     ----------
@@ -115,6 +193,10 @@ def run_prediction(
     weather_date : str, optional
         First round date 'YYYY-MM-DD'. If provided (along with course_name),
         fetches wind forecast and adjusts course-fit weights accordingly.
+    use_ensemble : bool
+        Whether to blend DataGolf probabilities into final predictions. Default True.
+    use_recent_form : bool
+        Whether to apply recent tournament form adjustment. Default True.
     """
 
     # Get current field
@@ -176,9 +258,32 @@ def run_prediction(
         field_scores = apply_course_history(field_scores, event_name, db)
         log.info("Course history applied")
 
+    # Recent form: boost/fade based on last 5 tournament finishes
+    if use_recent_form:
+        field_scores = apply_recent_form(field_scores, db)
+        log.info("Recent form applied")
+
+    # Resolve cut rule for this event
+    cut_rule = get_cut_rule(event_name, field_size=len(dg_ids))
+
     # Run Monte Carlo
     log.info(f"Running {N_SIMULATIONS:,} simulations...")
-    sim_results = simulate_tournament(field_scores, n_sims=N_SIMULATIONS, seed=RANDOM_SEED)
+    sim_results = simulate_tournament(
+        field_scores,
+        n_sims=N_SIMULATIONS,
+        seed=RANDOM_SEED,
+        apply_cut=cut_rule.apply_cut,
+        cut_top_n=cut_rule.cut_n,
+    )
+
+    # Ensemble: blend DataGolf probabilities as a calibration anchor
+    if use_ensemble:
+        sim_results = apply_ensemble(sim_results, dg_weight=DG_ENSEMBLE_WEIGHT)
+
+    # Carry form streak flags through to output
+    if use_recent_form and "form_streak" in field_scores.columns:
+        streak_map = field_scores.set_index("dg_id")["form_streak"].to_dict()
+        sim_results["form_streak"] = sim_results["dg_id"].map(streak_map)
 
     # --- Print results table ---
     separator = "=" * 72
@@ -193,12 +298,19 @@ def run_prediction(
         adjustments.append("recency")
     if course_name:
         adjustments.append("course fit")
+    if use_recent_form:
+        adjustments.append("recent form")
+    if use_ensemble:
+        adjustments.append(f"ensemble ({DG_ENSEMBLE_WEIGHT:.0%} DG)")
     adj_label = (f"  Adjustments: {', '.join(adjustments)}" if adjustments
                  else "  Adjustments: none")
     print(adj_label)
+    print(f"  Cut rule: {cut_rule.label}")
     print(f"  Model: {N_SIMULATIONS:,} simulations  |  {len(dg_ids)} players")
     print(separator)
-    print(f"{'PLAYER':<28} {'WIN%':>6} {'TOP5%':>6} {'TOP10%':>7} {'TOP20%':>7} {'CUT%':>6} {'SG':>6}")
+    has_streaks = "form_streak" in sim_results.columns
+    streak_hdr = "  FORM" if has_streaks else ""
+    print(f"{'PLAYER':<28} {'WIN%':>6} {'TOP5%':>6} {'TOP10%':>7} {'TOP20%':>7} {'CUT%':>6} {'SG':>6}{streak_hdr}")
     print(divider)
 
     for _, row in sim_results.head(top_n).iterrows():
@@ -208,6 +320,14 @@ def run_prediction(
             parts = name.split(",", 1)
             name = f"{parts[1].strip()} {parts[0].strip()}"
 
+        streak = ""
+        if has_streaks:
+            s = row.get("form_streak")
+            if s == "HOT":
+                streak = "   HOT"
+            elif s == "COLD":
+                streak = "  COLD"
+
         print(
             f"{name:<28}"
             f"  {row['win_prob']*100:>5.1f}%"
@@ -216,6 +336,7 @@ def run_prediction(
             f"  {row['top20_prob']*100:>6.1f}%"
             f"  {row['make_cut_prob']*100:>5.1f}%"
             f"  {row.get('sg_composite', 0):>+5.2f}"
+            f"{streak}"
         )
 
     print(divider)
@@ -303,6 +424,18 @@ def main():
         default=False,
         help="Disable course history adjustment.",
     )
+    parser.add_argument(
+        "--no-ensemble",
+        action="store_true",
+        default=False,
+        help="Disable DataGolf ensemble blend (use pure Monte Carlo probabilities).",
+    )
+    parser.add_argument(
+        "--no-form",
+        action="store_true",
+        default=False,
+        help="Disable recent form adjustment (last 5 events momentum signal).",
+    )
     args = parser.parse_args()
 
     run_prediction(
@@ -312,6 +445,8 @@ def main():
         use_recency=not args.no_recency,
         weather_date=args.weather,
         use_course_history=not args.no_history,
+        use_ensemble=not args.no_ensemble,
+        use_recent_form=not args.no_form,
     )
 
 

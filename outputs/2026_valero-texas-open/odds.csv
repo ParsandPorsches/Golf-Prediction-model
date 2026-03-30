@@ -1,0 +1,7 @@
+player_name,market,book,decimal_odds
+# Paste DraftKings/FanDuel odds here before running odds_scraper.py
+# Example rows (delete these and add real odds):
+# Scottie Scheffler,win,draftkings,4.50
+# Scottie Scheffler,top_5,draftkings,1.80
+# Scottie Scheffler,top_10,draftkings,1.40
+# Scottie Scheffler,make_cut,draftkings,1.10
